@@ -200,6 +200,13 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
             try self.compileInt(const_idx);
         },
         .identifier => {
+            if (std.mem.eql(u8, node_source, "true")) {
+                try self.addInstruction(.true);
+                return;
+            } else if (std.mem.eql(u8, node_source, "false")) {
+                try self.addInstruction(.false);
+                return;
+            }
             const const_idx = try self.addConstant(.{ .identifier = node_source });
             if (self.context.hasGlobal(const_idx)) {
                 try self.addInstruction(.get_global);

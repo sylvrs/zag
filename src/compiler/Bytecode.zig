@@ -5,12 +5,14 @@ pub const Value = @import("value.zig").Value;
 pub const Opcode = enum(u8) {
     ret = 0,
     @"const" = 1,
-    add = 2,
-    sub = 3,
-    mul = 4,
-    div = 5,
-    pow = 6,
-    mod = 7,
+    true = 2,
+    false = 3,
+    add = 4,
+    sub = 5,
+    mul = 6,
+    div = 7,
+    pow = 8,
+    mod = 9,
 
     get_global = 10,
     set_global = 11,
@@ -31,6 +33,10 @@ pub const Instruction = union(Opcode) {
     ret: void,
     /// an index into the constant pool
     @"const": u16,
+    /// Represents a true value in the program
+    true: void,
+    /// Represents a false value in the program
+    false: void,
     /// Pops two values on the stack, adds them, and pushes them back onto the stack
     add: void,
     /// Pops two values on the stack, subtracts them, and pushes them back onto the stack

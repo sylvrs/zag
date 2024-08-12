@@ -98,6 +98,9 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             const value = self.fetchConstant();
             try self.stack.push(value);
         },
+        .true, .false => {
+            try self.stack.push(if (opcode == .true) Value.True else Value.False);
+        },
         .add, .sub, .mul, .div, .pow, .mod => {
             const first = try self.stack.pop();
             const second = try self.stack.pop();

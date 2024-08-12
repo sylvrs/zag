@@ -10,9 +10,14 @@ const ExampleCode =
     \\const c = a - b;
     \\var d = c ** 5;
     \\d *= 5;
+    \\const e = true;
+    \\const f = false;
     \\const first_name = "Em";
     \\const concatted = first_name + ": " + d;
 ;
+
+// jump_fwd, jump_back, jump_if_true/jump_if_false
+// 000 true
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

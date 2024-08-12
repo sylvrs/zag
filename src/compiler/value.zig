@@ -2,10 +2,16 @@ const std = @import("std");
 const Vm = @import("../Vm.zig");
 
 pub const Value = union(enum) {
+    pub const True = Value{ .boolean = true };
+    pub const False = Value{ .boolean = false };
+    pub const Void = Value{ .void = {} };
+
     string: []const u8,
     identifier: []const u8,
     int: isize,
     float: f64,
+    boolean: bool,
+    void: void,
 
     /// Returns true if the value provided has the same tag type and inner value
     pub fn eql(self: Value, other: Value) bool {
@@ -18,6 +24,8 @@ pub const Value = union(enum) {
             .identifier => |ident| std.mem.eql(u8, ident, other.identifier),
             .int => |int| int == other.int,
             .float => |float| float == other.float,
+            .boolean => |boolean| boolean == other.boolean,
+            .void => true,
         };
     }
 
@@ -133,6 +141,8 @@ pub const Value = union(enum) {
             .identifier => |ident| try writer.writeAll(ident),
             .int => |int| try writer.print("{d}", .{int}),
             .float => |float| try writer.print("{d}", .{float}),
+            .boolean => |boolean| try writer.print("{}", .{boolean}),
+            .void => {},
         }
     }
 };
