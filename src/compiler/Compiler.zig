@@ -136,6 +136,51 @@ fn compileVarDecl(self: *Self, var_decl: Ast.full.VarDecl) !void {
     }
 }
 
+pub fn compileAssign(self: *Self, node_idx: Ast.Node.Index) !void {
+    const node_data: Ast.Node.Data = self.ast.nodes.items(.data)[node_idx];
+    const op_idx: Ast.TokenIndex = self.ast.nodes.items(.main_token)[node_idx];
+
+    const var_ident = self.ast.getNodeSource(node_data.lhs);
+    const ident_idx = try self.addConstant(.{ .identifier = var_ident });
+
+    if (!self.context.hasGlobal(ident_idx)) {
+        std.debug.panic("global '{s}' does not exist", .{var_ident});
+    }
+
+    try self.compileExpression(node_data.rhs);
+
+    const op_slice = self.ast.tokenSlice(op_idx);
+    if (try assignToOp(op_slice)) |op| {
+        try self.addInstruction(.get_global);
+        try self.compileInt(ident_idx);
+        try self.addInstruction(op);
+    }
+
+    // todo: locals
+    try self.addInstruction(.set_global);
+    try self.compileInt(ident_idx);
+}
+
+inline fn assignToOp(token: []const u8) !?Bytecode.Opcode {
+    if (std.mem.eql(u8, token, "=")) {
+        return null;
+    } else if (std.mem.eql(u8, token, "+=")) {
+        return .add;
+    } else if (std.mem.eql(u8, token, "-=")) {
+        return .sub;
+    } else if (std.mem.eql(u8, token, "*=")) {
+        return .mul;
+    } else if (std.mem.eql(u8, token, "/=")) {
+        return .div;
+    } else if (std.mem.eql(u8, token, "**=")) {
+        return .pow;
+    } else if (std.mem.eql(u8, token, "%=")) {
+        return .mod;
+    } else {
+        return error.UnknownAssignType;
+    }
+}
+
 pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
     const node_tag: Ast.Node.Tag = self.ast.nodes.items(.tag)[node_idx];
     const node_data: Ast.Node.Data = self.ast.nodes.items(.data)[node_idx];
@@ -163,10 +208,17 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
                 std.debug.panic("global {s} not defined", .{node_source});
             }
         },
-        .add => {
+        .add, .sub, .mul, .div, .array_mult => {
             try self.compileExpression(node_data.rhs);
             try self.compileExpression(node_data.lhs);
-            try self.addInstruction(.add);
+            try self.addInstruction(switch (node_tag) {
+                .add => .add,
+                .sub => .sub,
+                .mul => .mul,
+                .div => .div,
+                .array_mult => .pow,
+                inline else => unreachable,
+            });
         },
         inline else => |tag| std.debug.panic("expr {s} is not implemented", .{@tagName(tag)}),
     }
@@ -211,8 +263,6 @@ pub fn compile(self: *Self) !Bytecode {
 
     const decls = self.ast.extra_data[fn_body.lhs..fn_body.rhs];
 
-    std.debug.print("fn body data: {any}\n", .{fn_body});
-
     // todo: if consts are referenced in a fn body, we need to declare that as global
     // iterate over the body
     for (decls) |decl| {
@@ -223,8 +273,8 @@ pub fn compile(self: *Self) !Bytecode {
                 const var_decl = self.ast.simpleVarDecl(decl);
                 try self.compileVarDecl(var_decl);
             },
-            // todo: handle all assign types
-            .assign => {},
+            // todo: **=
+            .assign, .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => try self.compileAssign(decl),
             .fn_decl => {
                 const fn_data = node_data[decl];
                 const inner_fn_proto_idx = fn_data.lhs;

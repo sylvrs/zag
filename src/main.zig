@@ -4,12 +4,12 @@ pub const Ast = std.zig.Ast;
 pub const Vm = @import("Vm.zig");
 
 /// Test script to parse
-/// TODO: extract fns from inside run
 const ExampleCode =
-    \\const a = 1_000;
-    \\const b = 2.0;
-    \\const c = a + b;
-    \\
+    \\const a = 0xFF;
+    \\const b = 0xFD;
+    \\const c = a - b;
+    \\var d = c ** 5;
+    \\d *= 5;
 ;
 
 pub fn main() !void {
@@ -57,7 +57,6 @@ pub fn preprocess(ally: std.mem.Allocator, source: []const u8) ![:0]const u8 {
 
     // todo: extract fns & check for name collision w/ source
     // random name gen?
-
     try output.appendSlice("fn run() void {");
     try output.appendSlice(source);
     try output.append('}');

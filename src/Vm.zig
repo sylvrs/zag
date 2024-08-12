@@ -98,11 +98,20 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             const value = self.fetchConstant();
             try self.stack.push(value);
         },
-        .add => {
+        .add, .sub, .mul, .div, .pow, .mod => {
             const first = try self.stack.pop();
             const second = try self.stack.pop();
 
-            const result = try first.add(second);
+            //            try @field(first, @tagName(opcode));
+            const result = switch (opcode) {
+                .add => try first.add(second),
+                .sub => try first.sub(second),
+                .mul => try first.mul(second),
+                .div => try first.div(second),
+                .pow => try first.pow(second),
+                .mod => try first.mod(second),
+                inline else => unreachable,
+            };
             try self.stack.push(result);
         },
         .get_global => {

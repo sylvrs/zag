@@ -6,6 +6,11 @@ pub const Opcode = enum(u8) {
     ret = 0,
     @"const" = 1,
     add = 2,
+    sub = 3,
+    mul = 4,
+    div = 5,
+    pow = 6,
+    mod = 7,
 
     get_global = 10,
     set_global = 11,
@@ -28,6 +33,16 @@ pub const Instruction = union(Opcode) {
     @"const": u16,
     /// Pops two values on the stack, adds them, and pushes them back onto the stack
     add: void,
+    /// Pops two values on the stack, subtracts them, and pushes them back onto the stack
+    sub: void,
+    /// Pops two values on the stack, multiplies them, and pushes them back onto the stack
+    mul: void,
+    /// Pops two values on the stack, divides them, and pushes them back onto the stack
+    div: void,
+    /// Pops two values on the stack, does a power op on them, and pushes them back onto the stack
+    pow: void,
+    /// Pops two values on the stack, does a mod op on them, and pushes them back onto the stack
+    mod: void,
     /// Gets the global value of the variable named using the constant index
     get_global: u16,
     /// Sets the global value by the name using the constant index
@@ -56,7 +71,7 @@ pub fn dump(self: Self, writer: anytype) !void {
                 const const_idx = self.fetchInt(u16, index);
                 index += 2;
 
-                try writer.print("const [{d} = {any}]", .{ const_idx, self.constant_pool[const_idx] });
+                try writer.print("const [#{d} => {any}]", .{ const_idx, self.constant_pool[const_idx] });
             },
             .add => try writer.writeAll("add"),
             .set_global, .get_global => |inner| {

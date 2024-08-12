@@ -36,6 +36,86 @@ pub const Value = union(enum) {
         };
     }
 
+    pub fn sub(self: Value, other: Value) !Value {
+        return switch (self) {
+            .int => |int| switch (other) {
+                .int => |other_int| .{ .int = int - other_int },
+                .float => |other_float| .{ .float = @as(f64, @floatFromInt(int)) - other_float },
+                inline else => error.UnsupportedOperation,
+            },
+            .float => |float| switch (other) {
+                .int => |other_int| .{ .float = float - @as(f64, @floatFromInt(other_int)) },
+                .float => |other_float| .{ .float = float - other_float },
+                inline else => error.UnsupportedOperation,
+            },
+            inline else => error.UnsupportedOperation,
+        };
+    }
+
+    pub fn mul(self: Value, other: Value) !Value {
+        return switch (self) {
+            .int => |int| switch (other) {
+                .int => |other_int| .{ .int = int * other_int },
+                .float => |other_float| .{ .float = @as(f64, @floatFromInt(int)) * other_float },
+                inline else => error.UnsupportedOperation,
+            },
+            .float => |float| switch (other) {
+                .int => |other_int| .{ .float = float * @as(f64, @floatFromInt(other_int)) },
+                .float => |other_float| .{ .float = float * other_float },
+                inline else => error.UnsupportedOperation,
+            },
+            inline else => error.UnsupportedOperation,
+        };
+    }
+
+    pub fn div(self: Value, other: Value) !Value {
+        return switch (self) {
+            .int => |int| switch (other) {
+                .int => |other_int| .{ .int = @divTrunc(int, other_int) },
+                .float => |other_float| .{ .float = @as(f64, @floatFromInt(int)) / other_float },
+                inline else => error.UnsupportedOperation,
+            },
+            .float => |float| switch (other) {
+                .int => |other_int| .{ .float = float / @as(f64, @floatFromInt(other_int)) },
+                .float => |other_float| .{ .float = float / other_float },
+                inline else => error.UnsupportedOperation,
+            },
+            inline else => error.UnsupportedOperation,
+        };
+    }
+
+    pub fn pow(self: Value, other: Value) !Value {
+        return switch (self) {
+            .int => |int| switch (other) {
+                .int => |other_int| .{ .int = std.math.pow(usize, int, other_int) },
+                .float => |other_float| .{ .float = std.math.pow(f64, @as(f64, @floatFromInt(int)), other_float) },
+                inline else => error.UnsupportedOperation,
+            },
+            .float => |float| switch (other) {
+                .int => |other_int| .{ .float = std.math.pow(f64, float, @as(f64, @floatFromInt(other_int))) },
+                .float => |other_float| .{ .float = std.math.pow(f64, float, other_float) },
+                inline else => error.UnsupportedOperation,
+            },
+            inline else => error.UnsupportedOperation,
+        };
+    }
+
+    pub fn mod(self: Value, other: Value) !Value {
+        return switch (self) {
+            .int => |int| switch (other) {
+                .int => |other_int| .{ .int = @mod(int, other_int) },
+                .float => |other_float| .{ .float = @mod(@as(f64, @floatFromInt(int)), other_float) },
+                inline else => error.UnsupportedOperation,
+            },
+            .float => |float| switch (other) {
+                .int => |other_int| .{ .float = @mod(float, @as(f64, @floatFromInt(other_int))) },
+                .float => |other_float| .{ .float = @mod(float, other_float) },
+                inline else => error.UnsupportedOperation,
+            },
+            inline else => error.UnsupportedOperation,
+        };
+    }
+
     pub fn format(self: Value, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         switch (self) {
             .string => |str| try writer.print("\"{s}\"", .{str}),
