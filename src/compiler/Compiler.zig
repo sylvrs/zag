@@ -6,6 +6,7 @@ const Self = @This();
 
 /// Represents an index in the constant pool
 const ConstantIndex = u16;
+const MaxJumpLength: u16 = std.math.maxInt(u16);
 
 const Variable = struct {
     /// TODO: we could potentially make this a tagged union and provide the scope index for local variables
@@ -43,6 +44,12 @@ const Context = struct {
     }
 };
 
+const Keywords = std.StaticStringMap(Bytecode.Opcode).initComptime(.{
+    .{ "true", .true },
+    .{ "false", .false },
+    .{ "null", .null },
+});
+
 // constant pool:
 // 0: Value{ .string = "name" }
 // 1: Value{ .int = 1 }
@@ -75,7 +82,6 @@ pub fn deinit(self: *Self) void {
     self.constant_pool.deinit();
     self.instructions.deinit();
 }
-
 /// Adds a constant to the constant pool
 fn addConstant(self: *Self, value: Bytecode.Value) !ConstantIndex {
     for (self.constant_pool.items, 0..) |item, item_idx| {
@@ -200,11 +206,9 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
             try self.compileInt(const_idx);
         },
         .identifier => {
-            if (std.mem.eql(u8, node_source, "true")) {
-                try self.addInstruction(.true);
-                return;
-            } else if (std.mem.eql(u8, node_source, "false")) {
-                try self.addInstruction(.false);
+            const keyword = Keywords.get(node_source);
+            if (keyword) |op| {
+                try self.addInstruction(op);
                 return;
             }
             const const_idx = try self.addConstant(.{ .identifier = node_source });
@@ -232,11 +236,81 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
                 inline else => unreachable,
             });
         },
+        .greater_than, .less_than, .greater_or_equal, .less_or_equal, .equal_equal, .bang_equal => {
+            try self.compileExpression(node_data.rhs);
+            try self.compileExpression(node_data.lhs);
+            try self.addInstruction(switch (node_tag) {
+                .greater_than => .gt,
+                .less_than => .lt,
+                .greater_or_equal => .gte,
+                .less_or_equal => .lte,
+                .equal_equal => .eq,
+                .bang_equal => .not_eq,
+                inline else => unreachable,
+            });
+        },
+        .@"if", .if_simple => {
+            const if_expr = self.ast.fullIf(node_idx) orelse return error.IfExpected;
+            const if_data = self.ast.nodes.items(.data)[node_idx];
+            _ = if_data; // autofix
+
+            // if (true) 2
+            // 000 true
+            // 001 jump_if_false (007 - 001 = 006)
+            // 004 const [2]
+            // 007 jump_fwd (00d - 007 = 003)
+            // ...
+            // else 5
+            // 00a const [5]
+            // ...
+            // 00d void
+            try self.compileExpression(if_expr.ast.cond_expr);
+
+            try self.addInstruction(.jump_if_false);
+            const jif_pos: u16 = @intCast(self.instructions.items.len);
+            try self.compileInt(MaxJumpLength);
+            const jif_offset_start = self.instructions.items.len;
+
+            // body:
+            try self.compileExpression(if_expr.ast.then_expr);
+
+            try self.addInstruction(.jump_fwd);
+            const jfwd_pos = self.instructions.items.len;
+            try self.compileInt(MaxJumpLength);
+            const jfwd_offset_start = self.instructions.items.len;
+
+            const jif_offset_end = self.instructions.items.len;
+            // else:
+            if (if_expr.ast.else_expr != 0) {
+                std.debug.print("else expr: {s}\n", .{self.ast.getNodeSource(if_expr.ast.else_expr)});
+                try self.compileExpression(if_expr.ast.else_expr);
+            } else {
+                try self.addInstruction(.void);
+            }
+            const jfwd_offset_end = self.instructions.items.len;
+
+            // patch the relative jumps
+            try self.replaceAt(jif_pos, u16, @intCast(jif_offset_end - jif_offset_start));
+            try self.replaceAt(jfwd_pos, u16, @intCast(jfwd_offset_end - jfwd_offset_start));
+        },
         inline else => |tag| std.debug.panic("expr {s} is not implemented", .{@tagName(tag)}),
     }
 }
 
-pub fn compileInt(self: *Self, value: anytype) !void {
+/// Replaces a section of our instruction bytes with the data given
+pub fn replaceAt(self: *Self, start: usize, comptime DataType: type, data: DataType) !void {
+    const data_type_info = @typeInfo(DataType);
+    switch (data_type_info) {
+        .Int => {
+            const encoded = try self.encodeInt(data);
+            @memcpy(self.instructions.items[start..(start + @sizeOf(DataType))], encoded);
+        },
+        inline else => std.debug.panic("{s} not implemented for replaceAt", .{@typeName(DataType)}),
+    }
+}
+
+pub inline fn encodeInt(self: *Self, value: anytype) ![]const u8 {
+    _ = self; // autofix
     const ValueType = @TypeOf(value);
     const value_type_info = @typeInfo(ValueType);
     if (value_type_info != .Int) @compileError("can not compile non-int in compileInt");
@@ -248,7 +322,12 @@ pub fn compileInt(self: *Self, value: anytype) !void {
     var byte_buf: [bytes]u8 = undefined;
 
     std.mem.writeInt(u16, &byte_buf, value, .big);
-    try self.appendSliceToInstructions(&byte_buf);
+    return &byte_buf;
+}
+
+pub fn compileInt(self: *Self, value: anytype) !void {
+    const bytes = try self.encodeInt(value);
+    try self.appendSliceToInstructions(bytes);
 }
 
 pub fn compile(self: *Self) !Bytecode {
@@ -271,8 +350,6 @@ pub fn compile(self: *Self) !Bytecode {
     // 1. assert that the fn is the root
     // 2. walk the nodes inside of the fn body
     // 3. parse that as the base script
-    //
-
     const decls = self.ast.extra_data[fn_body.lhs..fn_body.rhs];
 
     // todo: if consts are referenced in a fn body, we need to declare that as global
@@ -323,6 +400,7 @@ pub fn compile(self: *Self) !Bytecode {
                 // todo: handle function return type & body
                 std.debug.print(") {{}}\n", .{});
             },
+            .@"if", .if_simple => try self.compileExpression(decl),
             inline else => |inner| {
                 std.debug.panic("unhandled decl type: {s}\n", .{@tagName(inner)});
             },

@@ -4,20 +4,15 @@ pub const Ast = std.zig.Ast;
 pub const Vm = @import("Vm.zig");
 
 /// Test script to parse
-const ExampleCode =
-    \\const a = 0xFF;
-    \\const b = 0xFD;
-    \\const c = a - b;
-    \\var d = c ** 5;
-    \\d *= 5;
-    \\const e = true;
-    \\const f = false;
-    \\const first_name = "Em";
-    \\const concatted = first_name + ": " + d;
-;
-
+const ExampleCode = @embedFile("./test_code.zig");
+// const g = if (true) 5 else null;
 // jump_fwd, jump_back, jump_if_true/jump_if_false
 // 000 true
+// 001 jump_if_false XXX
+// 004 const [#2 => 5]
+// 007 jump_fwd 005
+// 00A null
+// 00B set_global g
 
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);

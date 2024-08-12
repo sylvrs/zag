@@ -3,23 +3,38 @@ const std = @import("std");
 pub const Value = @import("value.zig").Value;
 
 pub const Opcode = enum(u8) {
-    ret = 0,
-    @"const" = 1,
-    true = 2,
-    false = 3,
-    add = 4,
-    sub = 5,
-    mul = 6,
-    div = 7,
-    pow = 8,
-    mod = 9,
+    ret = 1,
+    @"const" = 2,
+    true = 3,
+    false = 4,
+    null = 5,
+    void = 6,
+    // arithmetic
+    add = 10,
+    sub = 11,
+    mul = 12,
+    div = 13,
+    pow = 14,
+    mod = 15,
+    // comparison
+    gt = 16,
+    gte = 17,
+    lt = 18,
+    lte = 19,
+    eq = 20,
+    not_eq = 21,
 
-    get_global = 10,
-    set_global = 11,
+    // jumps
+    jump_if_false = 30,
+    jump_fwd = 31,
+    jump_back = 32,
+    // vars
+    get_global = 40,
+    set_global = 41,
 
-    pub fn from(byte: u8) Opcode {
+    pub fn from(byte: u8) !Opcode {
         // todo: error checking
-        return @enumFromInt(byte);
+        return try std.meta.intToEnum(Opcode, byte);
     }
 
     /// Returns the byte associated with the opcode
@@ -37,6 +52,10 @@ pub const Instruction = union(Opcode) {
     true: void,
     /// Represents a false value in the program
     false: void,
+    /// Represents a null value in the program
+    null: void,
+    /// Represents a void value in the program
+    void: void,
     /// Pops two values on the stack, adds them, and pushes them back onto the stack
     add: void,
     /// Pops two values on the stack, subtracts them, and pushes them back onto the stack
@@ -49,6 +68,24 @@ pub const Instruction = union(Opcode) {
     pow: void,
     /// Pops two values on the stack, does a mod op on them, and pushes them back onto the stack
     mod: void,
+    /// Pops two values on the stack, check if lhs > rhs, and pushes the result (true or false)
+    gt: void,
+    /// Pops two values on the stack, check if lhs < rhs, and pushes the result (true or false)
+    lt: void,
+    /// Pops two values on the stack, check if lhs >= rhs, and pushes the result (true or false)
+    gte: void,
+    /// Pops two values on the stack, check if lhs <= rhs, and pushes the result (true or false)
+    lte: void,
+    /// Pops two values on the stack, check if lhs == rhs, and pushes the result (true or false)
+    eq: void,
+    /// Pops two values on the stack, check if lhs != rhs, and pushes the result (true or false)
+    not_eq: void,
+    /// Jumps forward a relative amount if the value popped is false
+    jump_if_false: u16,
+    /// Jumps forwards a relative amount in the program
+    jump_fwd: u16,
+    /// Jumps backwards in the program
+    jump_back: u16,
     /// Gets the global value of the variable named using the constant index
     get_global: u16,
     /// Sets the global value by the name using the constant index
@@ -66,7 +103,11 @@ pub fn dump(self: Self, writer: anytype) !void {
     var index: usize = 0;
 
     while (index < self.instructions.len) {
-        const opcode = Opcode.from(self.instructions[index]);
+        const raw = self.instructions[index];
+        const opcode = Opcode.from(raw) catch |err| {
+            std.log.err("encountered unexpected opcode 0x{x:0>2} at index {d}", .{ raw, index });
+            return err;
+        };
         try writer.print("{x:0>4} ", .{index});
         index += 1;
 
@@ -77,7 +118,12 @@ pub fn dump(self: Self, writer: anytype) !void {
 
                 try writer.print("const [#{d} => {any}]", .{ const_idx, self.constant_pool[const_idx] });
             },
-            .add => try writer.writeAll("add"),
+            .jump_if_false, .jump_fwd, .jump_back => {
+                const amount = self.fetchInt(u16, index);
+                index += 2;
+
+                try writer.print("{s} [{x:0>4}]", .{ @tagName(opcode), amount });
+            },
             .set_global, .get_global => |inner| {
                 const const_idx = self.fetchInt(u16, index);
                 index += 2;

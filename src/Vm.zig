@@ -82,13 +82,14 @@ pub fn fetchConstant(self: *Self) Value {
 pub fn run(self: *Self) !void {
     while (self.program_counter < self.program.instructions.len) {
         const raw_instr = self.fetchByte();
-        const opcode = Opcode.from(raw_instr);
+        const opcode = try Opcode.from(raw_instr);
         try self.execute(opcode);
     }
 }
 
 /// Executes a single instruction given the opcode
 pub fn execute(self: *Self, opcode: Opcode) !void {
+    std.log.info("[{x:0>4}] {s}", .{ self.program_counter - 1, @tagName(opcode) });
     switch (opcode) {
         .ret => {
             // kind of hacky? maintain state instead?
@@ -98,9 +99,9 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             const value = self.fetchConstant();
             try self.stack.push(value);
         },
-        .true, .false => {
-            try self.stack.push(if (opcode == .true) Value.True else Value.False);
-        },
+        .true, .false => try self.stack.push(if (opcode == .true) Value.True else Value.False),
+        .null => try self.stack.push(Value.Null),
+        .void => try self.stack.push(Value.Void),
         .add, .sub, .mul, .div, .pow, .mod => {
             const first = try self.stack.pop();
             const second = try self.stack.pop();
@@ -116,6 +117,38 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
                 inline else => unreachable,
             };
             try self.stack.push(result);
+        },
+        .gt, .gte, .lt, .lte, .eq, .not_eq => {
+            const first = try self.stack.pop();
+            const second = try self.stack.pop();
+
+            const result = switch (opcode) {
+                .gt => boolToValue(try first.greaterThan(second)),
+                .lt => boolToValue(try first.lessThan(second)),
+                .gte => boolToValue(try first.greaterThanOrEqual(second)),
+                .lte => boolToValue(try first.lessThanOrEqual(second)),
+                .eq => boolToValue(first.eql(second)),
+                .not_eq => boolToValue(!first.eql(second)),
+                inline else => std.debug.panic("comparison op {s} not implemented", .{@tagName(opcode)}),
+            };
+
+            try self.stack.push(result);
+        },
+        .jump_if_false => {
+            const amount = self.fetchInt(u16);
+
+            const condition = try self.stack.pop();
+            if (condition != .boolean) std.debug.panic("expected boolean, but received {s}", .{@tagName(condition)});
+
+            if (!condition.boolean) self.program_counter += amount;
+        },
+        .jump_fwd => {
+            const amount = self.fetchInt(u16);
+            self.program_counter += amount;
+        },
+        .jump_back => {
+            const amount = self.fetchInt(u16);
+            self.program_counter -= amount;
         },
         .get_global => {
             const name_value = self.fetchConstant();
@@ -140,6 +173,10 @@ pub fn allocString(self: *Self, value: []const u8) !Value {
     // todo: track string
 
     return Value{ .string = duped };
+}
+
+inline fn boolToValue(value: bool) Value {
+    return if (value) Value.True else Value.False;
 }
 
 test "ensure fetchInt works" {
