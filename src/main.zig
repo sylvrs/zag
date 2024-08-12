@@ -10,6 +10,8 @@ const ExampleCode =
     \\const c = a - b;
     \\var d = c ** 5;
     \\d *= 5;
+    \\const first_name = "Em";
+    \\const concatted = first_name + ": " + d;
 ;
 
 pub fn main() !void {
@@ -38,7 +40,14 @@ pub fn main() !void {
     // result is bytecode
     var result = try compiler.compile();
 
+    try stderr.writeAll(" -- Source Code --\n");
+    try stderr.writeAll(ExampleCode);
+    try stderr.writeByte('\n');
+    try stderr.writeAll("-------------------\n");
+
+    try stderr.writeAll(" -- Bytecode -- \n");
     try result.dump(stderr);
+    try stderr.writeAll("----------------\n");
 
     var vm = Vm.init(ally, result);
     defer vm.deinit();
@@ -46,7 +55,7 @@ pub fn main() !void {
 
     var global_iterator = vm.globals.iterator();
     while (global_iterator.next()) |global| {
-        std.debug.print("global: {s} = {any}\n", .{ global.key_ptr.*, global.value_ptr.* });
+        std.debug.print("{s} = {any}\n", .{ global.key_ptr.*, global.value_ptr.* });
     }
 }
 

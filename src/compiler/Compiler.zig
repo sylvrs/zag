@@ -191,7 +191,7 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
             const value: Bytecode.Value = switch (parsed) {
                 // double parsing sux
                 .float => .{ .float = try std.fmt.parseFloat(f64, node_source) },
-                .int => |value| .{ .int = @as(usize, @intCast(value)) },
+                .int => |value| .{ .int = @as(isize, @intCast(value)) },
                 .big_int => @panic("big int not implemented"),
                 .failure => return error.NumberParseError,
             };
@@ -207,6 +207,11 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
             } else {
                 std.debug.panic("global {s} not defined", .{node_source});
             }
+        },
+        .string_literal => {
+            const const_idx = try self.addConstant(.{ .string = std.mem.trim(u8, node_source, "\"") });
+            try self.addInstruction(.@"const");
+            try self.compileInt(const_idx);
         },
         .add, .sub, .mul, .div, .array_mult => {
             try self.compileExpression(node_data.rhs);

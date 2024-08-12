@@ -104,7 +104,7 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
 
             //            try @field(first, @tagName(opcode));
             const result = switch (opcode) {
-                .add => try first.add(second),
+                .add => if (first == .string) try first.concat(self, second) else try first.add(second),
                 .sub => try first.sub(second),
                 .mul => try first.mul(second),
                 .div => try first.div(second),
@@ -128,6 +128,15 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
         },
         // inline else => |tag| std.debug.panic("{s} is not implemented", .{@tagName(tag)}),
     }
+}
+
+pub fn allocString(self: *Self, value: []const u8) !Value {
+    const duped = try self.ally.dupe(u8, value);
+    errdefer self.ally.free(duped);
+
+    // todo: track string
+
+    return Value{ .string = duped };
 }
 
 test "ensure fetchInt works" {

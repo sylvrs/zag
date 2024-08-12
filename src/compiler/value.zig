@@ -1,9 +1,10 @@
 const std = @import("std");
+const Vm = @import("../Vm.zig");
 
 pub const Value = union(enum) {
     string: []const u8,
     identifier: []const u8,
-    int: usize,
+    int: isize,
     float: f64,
 
     /// Returns true if the value provided has the same tag type and inner value
@@ -18,6 +19,16 @@ pub const Value = union(enum) {
             .int => |int| int == other.int,
             .float => |float| float == other.float,
         };
+    }
+
+    pub fn concat(self: Value, vm: *Vm, other: Value) !Value {
+        if (self != .string) return error.StringExpected;
+        const str = self.string;
+
+        const fmted = try std.fmt.allocPrint(vm.ally, "{s}{s}", .{ str, other });
+        defer vm.ally.free(fmted);
+
+        return vm.allocString(fmted);
     }
 
     pub fn add(self: Value, other: Value) !Value {
@@ -87,7 +98,7 @@ pub const Value = union(enum) {
     pub fn pow(self: Value, other: Value) !Value {
         return switch (self) {
             .int => |int| switch (other) {
-                .int => |other_int| .{ .int = std.math.pow(usize, int, other_int) },
+                .int => |other_int| .{ .int = std.math.pow(isize, int, other_int) },
                 .float => |other_float| .{ .float = std.math.pow(f64, @as(f64, @floatFromInt(int)), other_float) },
                 inline else => error.UnsupportedOperation,
             },
@@ -118,7 +129,7 @@ pub const Value = union(enum) {
 
     pub fn format(self: Value, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
         switch (self) {
-            .string => |str| try writer.print("\"{s}\"", .{str}),
+            .string => |str| try writer.print("{s}", .{str}),
             .identifier => |ident| try writer.writeAll(ident),
             .int => |int| try writer.print("{d}", .{int}),
             .float => |float| try writer.print("{d}", .{float}),

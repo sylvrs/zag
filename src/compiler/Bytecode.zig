@@ -59,8 +59,6 @@ constant_pool: []const Value,
 pub fn dump(self: Self, writer: anytype) !void {
     var index: usize = 0;
 
-    // padding around the stream
-    if (self.instructions.len > 0) try writer.writeByte('\n');
     while (index < self.instructions.len) {
         const opcode = Opcode.from(self.instructions[index]);
         try writer.print("{x:0>4} ", .{index});
@@ -83,7 +81,6 @@ pub fn dump(self: Self, writer: anytype) !void {
         }
         try writer.writeByte('\n');
     }
-    try writer.writeByte('\n');
 }
 
 pub fn fetchInt(self: Self, comptime IntType: type, start: usize) IntType {
