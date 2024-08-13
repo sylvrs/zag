@@ -99,16 +99,17 @@ instructions: []const u8,
 /// The constants that make up the program
 constant_pool: []const Value,
 
-pub fn dump(self: Self, writer: anytype) !void {
+pub fn dump(self: Self) !void {
     var index: usize = 0;
 
+    std.log.info(" -- Bytecode --", .{});
     while (index < self.instructions.len) {
         const raw = self.instructions[index];
         const opcode = Opcode.from(raw) catch |err| {
             std.log.err("encountered unexpected opcode 0x{x:0>2} at index {d}", .{ raw, index });
             return err;
         };
-        try writer.print("{x:0>4} ", .{index});
+        std.log.info("{x:0>4} ", .{index});
         index += 1;
 
         switch (opcode) {
@@ -116,23 +117,23 @@ pub fn dump(self: Self, writer: anytype) !void {
                 const const_idx = self.fetchInt(u16, index);
                 index += 2;
 
-                try writer.print("const [#{d} => {any}]", .{ const_idx, self.constant_pool[const_idx] });
+                std.log.info("const [#{d} => {any}]", .{ const_idx, self.constant_pool[const_idx] });
             },
             .jump_if_false, .jump_fwd, .jump_back => {
                 const amount = self.fetchInt(u16, index);
                 index += 2;
 
-                try writer.print("{s} [{x:0>4}]", .{ @tagName(opcode), amount });
+                std.log.info("{s} [{x:0>4}]", .{ @tagName(opcode), amount });
             },
             .set_global, .get_global => |inner| {
                 const const_idx = self.fetchInt(u16, index);
                 index += 2;
-                try writer.print("{s} [{any}]", .{ @tagName(inner), self.constant_pool[const_idx] });
+                std.log.info("{s} [{any}]", .{ @tagName(inner), self.constant_pool[const_idx] });
             },
-            inline else => |tag| try writer.writeAll(@tagName(tag)),
+            inline else => |tag| std.log.info("{s}", .{@tagName(tag)}),
         }
-        try writer.writeByte('\n');
     }
+    std.log.info("----------------", .{});
 }
 
 pub fn fetchInt(self: Self, comptime IntType: type, start: usize) IntType {

@@ -1,7 +1,14 @@
 const std = @import("std");
+const clarp = @import("clarp");
+
 pub const Compiler = @import("compiler/Compiler.zig");
 pub const Ast = std.zig.Ast;
 pub const Vm = @import("Vm.zig");
+
+/// Log options
+pub const std_options = .{
+    .log_level = .info,
+};
 
 /// Test script to parse
 const ExampleCode = @embedFile("./test_code.zig");
@@ -14,12 +21,28 @@ const ExampleCode = @embedFile("./test_code.zig");
 // 00A null
 // 00B set_global g
 
+const ArgParser = clarp.Parser(struct {
+    source: bool,
+    bytecode: bool,
+
+    pub const clarp_options = clarp.Options(@This()){
+        .derive_short_names = true,
+    };
+}, .{});
+
 pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
-
     const stderr = std.io.getStdErr().writer();
     const ally = arena.allocator();
+
+    const args = try std.process.argsAlloc(ally);
+    const parsed = ArgParser.parse(args, .{
+        .err_writer = std.io.getStdErr().writer().any(),
+    }) catch |e| switch (e) {
+        error.HelpShown => return,
+        else => return e,
+    };
 
     const preprocessed = try preprocess(ally, ExampleCode);
 
@@ -38,16 +61,17 @@ pub fn main() !void {
     defer compiler.deinit();
 
     // result is bytecode
-    var result = try compiler.compile();
+    const result = try compiler.compile();
 
-    try stderr.writeAll(" -- Source Code --\n");
-    try stderr.writeAll(ExampleCode);
-    try stderr.writeByte('\n');
-    try stderr.writeAll("-------------------\n");
+    if (parsed.root.source) {
+        std.log.info(" -- Source Code --", .{});
+        try stderr.print(ExampleCode, .{});
+        std.log.info("-------------------", .{});
+    }
 
-    try stderr.writeAll(" -- Bytecode -- \n");
-    try result.dump(stderr);
-    try stderr.writeAll("----------------\n");
+    if (parsed.root.bytecode) {
+        try result.dump();
+    }
 
     var vm = Vm.init(ally, result);
     defer vm.deinit();
@@ -55,7 +79,7 @@ pub fn main() !void {
 
     var global_iterator = vm.globals.iterator();
     while (global_iterator.next()) |global| {
-        std.debug.print("{s} = {any}\n", .{ global.key_ptr.*, global.value_ptr.* });
+        std.log.info("{s} = {any}", .{ global.key_ptr.*, global.value_ptr.* });
     }
 }
 

@@ -89,7 +89,7 @@ pub fn run(self: *Self) !void {
 
 /// Executes a single instruction given the opcode
 pub fn execute(self: *Self, opcode: Opcode) !void {
-    std.log.info("[{x:0>4}] {s}", .{ self.program_counter - 1, @tagName(opcode) });
+    std.log.debug("[{x:0>4}] {s}", .{ self.program_counter - 1, @tagName(opcode) });
     switch (opcode) {
         .ret => {
             // kind of hacky? maintain state instead?

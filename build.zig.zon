@@ -1,7 +1,12 @@
 .{
     .name = "zag",
     .version = "0.0.1",
-    .dependencies = .{},
+    .dependencies = .{
+        .clarp = .{
+            .url = "https://github.com/travisstaloch/clarp/archive/refs/tags/0.13.0.tar.gz",
+            .hash = "12206804b14012e5aac619928a1e03bfce71a1a40820bd1b0ba44fb4b2c82bb1c07d",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

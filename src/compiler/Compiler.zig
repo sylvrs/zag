@@ -1,3 +1,4 @@
+// dichael mouglas
 const std = @import("std");
 const Ast = std.zig.Ast;
 const Bytecode = @import("Bytecode.zig");
@@ -6,6 +7,7 @@ const Self = @This();
 
 /// Represents an index in the constant pool
 const ConstantIndex = u16;
+/// Represents the max offset that a jump instruction can do
 const MaxJumpLength: u16 = std.math.maxInt(u16);
 
 const Variable = struct {
@@ -282,7 +284,6 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
             const jif_offset_end = self.instructions.items.len;
             // else:
             if (if_expr.ast.else_expr != 0) {
-                std.debug.print("else expr: {s}\n", .{self.ast.getNodeSource(if_expr.ast.else_expr)});
                 try self.compileExpression(if_expr.ast.else_expr);
             } else {
                 try self.addInstruction(.void);
