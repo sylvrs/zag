@@ -19,6 +19,10 @@ const Variable = struct {
     scope: Scope,
     mut: Mutability,
     name_index: ConstantIndex,
+    /// The scope depth the variable exists in
+    depth: usize = 0,
+    /// For local variables, this is how far deep the variable is on the stack
+    stack_offset: u16 = 0,
 };
 
 /// Context represents scope, depth, etc.
@@ -32,9 +36,16 @@ const Context = struct {
     //   const result = a + b;
     // }
     globals: std.AutoArrayHashMap(ConstantIndex, void),
+    /// Mapping of local variables to their variable structs
+    locals: std.AutoArrayHashMap(ConstantIndex, Variable),
+
+    pub fn init(ally: std.mem.Allocator) Context {
+        return .{ .globals = std.AutoArrayHashMap(ConstantIndex, void).init(ally), .locals = std.AutoArrayHashMap(ConstantIndex, Variable).init(ally) };
+    }
 
     pub fn deinit(self: *Context) void {
         self.globals.deinit();
+        self.locals.deinit();
     }
 
     pub fn hasGlobal(self: *Context, name_idx: ConstantIndex) bool {
@@ -43,6 +54,39 @@ const Context = struct {
 
     pub fn addGlobal(self: *Context, name_idx: ConstantIndex) !void {
         try self.globals.put(name_idx, {});
+    }
+
+    pub fn hasLocal(self: *Context, name_idx: ConstantIndex) bool {
+        return self.locals.contains(name_idx);
+    }
+
+    pub fn addLocal(self: *Context, name_idx: ConstantIndex, variable: Variable) !void {
+        try self.locals.put(name_idx, variable);
+    }
+
+    pub fn getLocal(self: *Context, name_idx: ConstantIndex) ?Variable {
+        return self.locals.get(name_idx);
+    }
+
+    pub fn startScope(self: *Context) void {
+        self.current_scope_depth += 1;
+    }
+
+    pub fn endScope(self: *Context) void {
+        self.current_scope_depth -= 1;
+
+        var iterator = self.locals.iterator();
+        while (iterator.next()) |entry| {
+            const local = entry.value_ptr.*;
+            // todo: stack-based?
+            if (local.depth > self.current_scope_depth) {
+                _ = self.locals.orderedRemove(entry.key_ptr.*);
+            }
+        }
+    }
+
+    pub fn getStackOffset(self: *Context) u16 {
+        return @intCast(self.locals.count());
     }
 };
 
@@ -71,16 +115,14 @@ pub fn init(ally: std.mem.Allocator, ast: *Ast) Self {
     return .{
         .ally = ally,
         .ast = ast,
-        .context = Context{
-            .globals = std.AutoArrayHashMap(ConstantIndex, void).init(ally),
-        },
+        .context = Context.init(ally),
         .constant_pool = std.ArrayList(Bytecode.Value).init(ally),
         .instructions = std.ArrayList(u8).init(ally),
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.context.globals.deinit();
+    self.context.deinit();
     self.constant_pool.deinit();
     self.instructions.deinit();
 }
@@ -127,11 +169,13 @@ fn compileVarDecl(self: *Self, var_decl: Ast.full.VarDecl) !void {
         .scope = if (self.context.current_scope_depth == 0) .global else .local,
         .mut = mut,
         .name_index = ident_idx,
+        .depth = self.context.current_scope_depth,
+        .stack_offset = self.context.getStackOffset(),
     };
 
     if (variable.scope == .global) {
         if (self.context.hasGlobal(ident_idx)) {
-            @panic("whoa. it already exists!");
+            std.debug.panic("whoa! global {s} already exists!", .{ident_token});
         }
         try self.context.addGlobal(ident_idx);
 
@@ -140,7 +184,18 @@ fn compileVarDecl(self: *Self, var_decl: Ast.full.VarDecl) !void {
         try self.addInstruction(.set_global);
         try self.compileInt(ident_idx);
     } else {
-        @panic("local vars are not supported yet");
+        if (self.context.hasGlobal(ident_idx)) {
+            std.debug.panic("whoa! local {s} overshadows global with the same name!", .{ident_token});
+        }
+        if (self.context.hasLocal(ident_idx)) {
+            std.debug.panic("whoa! local {s} already exists!", .{ident_token});
+        }
+
+        try self.context.addLocal(ident_idx, variable);
+        try self.compileExpression(var_decl.ast.init_node);
+
+        //try self.addInstruction(.set_local);
+        // try self.compileInt(variable.stack_offset);
     }
 }
 
@@ -151,22 +206,30 @@ pub fn compileAssign(self: *Self, node_idx: Ast.Node.Index) !void {
     const var_ident = self.ast.getNodeSource(node_data.lhs);
     const ident_idx = try self.addConstant(.{ .identifier = var_ident });
 
-    if (!self.context.hasGlobal(ident_idx)) {
+    const local = self.context.getLocal(ident_idx);
+
+    if (local == null and !self.context.hasGlobal(ident_idx)) {
         std.debug.panic("global '{s}' does not exist", .{var_ident});
     }
 
     try self.compileExpression(node_data.rhs);
 
+    const get_op: Bytecode.Opcode, const set_op: Bytecode.Opcode = if (local) |_|
+        .{ .get_local, .set_local }
+    else
+        .{ .get_global, .set_global };
+    const data = if (local) |local_var| local_var.stack_offset else ident_idx;
+
     const op_slice = self.ast.tokenSlice(op_idx);
     if (try assignToOp(op_slice)) |op| {
-        try self.addInstruction(.get_global);
-        try self.compileInt(ident_idx);
+        try self.addInstruction(get_op);
+        try self.compileInt(data);
         try self.addInstruction(op);
     }
 
     // todo: locals
-    try self.addInstruction(.set_global);
-    try self.compileInt(ident_idx);
+    try self.addInstruction(set_op);
+    try self.compileInt(data);
 }
 
 inline fn assignToOp(token: []const u8) !?Bytecode.Opcode {
@@ -190,10 +253,42 @@ inline fn assignToOp(token: []const u8) !?Bytecode.Opcode {
 }
 
 pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
+    const node_datas: []const Ast.Node.Data = self.ast.nodes.items(.data);
     const node_tag: Ast.Node.Tag = self.ast.nodes.items(.tag)[node_idx];
-    const node_data: Ast.Node.Data = self.ast.nodes.items(.data)[node_idx];
+    const node_data: Ast.Node.Data = node_datas[node_idx];
     const node_source = self.ast.getNodeSource(node_idx);
     switch (node_tag) {
+        .block, .block_two, .block_semicolon, .block_two_semicolon => {
+            self.context.startScope();
+            defer {
+                self.context.endScope();
+                self.addInstruction(.pop) catch unreachable;
+            }
+            var statements_buf: [2]Ast.Node.Index = undefined;
+            const statements = switch (node_tag) {
+                .block_two,
+                .block_two_semicolon,
+                => b: {
+                    statements_buf = .{ node_data.lhs, node_data.rhs };
+                    if (node_datas[node_idx].lhs == 0) {
+                        break :b statements_buf[0..0];
+                    } else if (node_datas[node_idx].rhs == 0) {
+                        break :b statements_buf[0..1];
+                    } else {
+                        break :b statements_buf[0..2];
+                    }
+                },
+                .block,
+                .block_semicolon,
+                => self.ast.extra_data[node_data.lhs..node_data.rhs],
+                else => unreachable,
+            };
+
+            for (statements) |expr| {
+                // std.debug.print("node_tag: {s}\n", .{@tagName(self.ast.nodes.items(.tag)[expr])});
+                try self.compileStatement(@intCast(expr));
+            }
+        },
         .number_literal => {
             const parsed = std.zig.parseNumberLiteral(node_source);
             const value: Bytecode.Value = switch (parsed) {
@@ -214,7 +309,10 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
                 return;
             }
             const const_idx = try self.addConstant(.{ .identifier = node_source });
-            if (self.context.hasGlobal(const_idx)) {
+            if (self.context.getLocal(const_idx)) |variable| {
+                try self.addInstruction(.get_local);
+                try self.compileInt(variable.stack_offset);
+            } else if (self.context.hasGlobal(const_idx)) {
                 try self.addInstruction(.get_global);
                 try self.compileInt(const_idx);
             } else {
@@ -322,7 +420,7 @@ pub inline fn encodeInt(self: *Self, value: anytype) ![]const u8 {
     const bytes: u16 = bits / 8;
     var byte_buf: [bytes]u8 = undefined;
 
-    std.mem.writeInt(u16, &byte_buf, value, .big);
+    std.mem.writeInt(ValueType, &byte_buf, value, .big);
     return &byte_buf;
 }
 
@@ -331,13 +429,64 @@ pub fn compileInt(self: *Self, value: anytype) !void {
     try self.appendSliceToInstructions(bytes);
 }
 
+pub fn compileStatement(self: *Self, node_idx: Ast.Node.Index) anyerror!void {
+    const node_data = self.ast.nodes.items(.data);
+    const node_tags = self.ast.nodes.items(.tag);
+    switch (node_tags[node_idx]) {
+        .simple_var_decl => {
+            const var_decl = self.ast.simpleVarDecl(node_idx);
+            try self.compileVarDecl(var_decl);
+        },
+        // todo: **=
+        .assign, .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => try self.compileAssign(node_idx),
+        .fn_decl => {
+            const fn_data = node_data[node_idx];
+            const inner_fn_proto_idx = fn_data.lhs;
+
+            // todo: fn decls
+            // simple has no params?
+            // multi has multi params?
+
+            std.debug.print("fn: {any}\n", .{node_tags[inner_fn_proto_idx]});
+
+            var buf: [1]Ast.Node.Index = undefined;
+            const fn_proto = self.ast.fullFnProto(&buf, inner_fn_proto_idx).?;
+
+            // const fn_body_idx = fn_data.rhs;
+            // const fn_proto = self.ast.fnProto(fn_proto_idx);
+            // const fn_decl = self.ast.fnProto(decl);
+
+            const name_token = self.ast.tokenSlice(fn_proto.name_token.?);
+            std.debug.print("fn {s}(", .{name_token});
+
+            var iterator = fn_proto.iterate(self.ast);
+
+            var param = iterator.next();
+            while (param != null) {
+                // const comptime_name = self.ast.tokenSlice(param.comptime_noalias);
+                const param_name = self.ast.tokenSlice(param.?.name_token.?);
+                const type_name = self.ast.getNodeSource(param.?.type_expr);
+                std.debug.print("{s}: {s}", .{ param_name, type_name });
+
+                param = iterator.next();
+                if (param) |_| std.debug.print(", ", .{});
+            }
+
+            // todo: handle function return type & body
+            std.debug.print(") {{}}\n", .{});
+        },
+        .@"if", .if_simple => try self.compileExpression(node_idx),
+        inline else => |inner| {
+            std.debug.panic("unhandled decl type: {s}\n", .{@tagName(inner)});
+        },
+    }
+}
+
 pub fn compile(self: *Self) !Bytecode {
     const root_decls = self.ast.rootDecls();
     std.debug.assert(root_decls.len != 0);
 
     const node_tags: []const Ast.Node.Tag = self.ast.nodes.items(.tag);
-    const main_tokens: []const Ast.TokenIndex = self.ast.nodes.items(.main_token);
-    _ = main_tokens; // autofix
     const node_data: []const Ast.Node.Data = self.ast.nodes.items(.data);
 
     // this should always be 0(?)
@@ -356,56 +505,7 @@ pub fn compile(self: *Self) !Bytecode {
     // todo: if consts are referenced in a fn body, we need to declare that as global
     // iterate over the body
     for (decls) |decl| {
-        const tag = node_tags[decl];
-        //        std.debug.print("tag: {s}\n", .{@tagName(tag)});
-        switch (tag) {
-            .simple_var_decl => {
-                const var_decl = self.ast.simpleVarDecl(decl);
-                try self.compileVarDecl(var_decl);
-            },
-            // todo: **=
-            .assign, .assign_add, .assign_sub, .assign_mul, .assign_div, .assign_mod => try self.compileAssign(decl),
-            .fn_decl => {
-                const fn_data = node_data[decl];
-                const inner_fn_proto_idx = fn_data.lhs;
-
-                // todo: fn decls
-                // simple has no params?
-                // multi has multi params?
-
-                std.debug.print("fn: {any}\n", .{node_tags[inner_fn_proto_idx]});
-
-                var buf: [1]Ast.Node.Index = undefined;
-                const fn_proto = self.ast.fullFnProto(&buf, inner_fn_proto_idx).?;
-
-                // const fn_body_idx = fn_data.rhs;
-                // const fn_proto = self.ast.fnProto(fn_proto_idx);
-                // const fn_decl = self.ast.fnProto(decl);
-
-                const name_token = self.ast.tokenSlice(fn_proto.name_token.?);
-                std.debug.print("fn {s}(", .{name_token});
-
-                var iterator = fn_proto.iterate(self.ast);
-
-                var param = iterator.next();
-                while (param != null) {
-                    // const comptime_name = self.ast.tokenSlice(param.comptime_noalias);
-                    const param_name = self.ast.tokenSlice(param.?.name_token.?);
-                    const type_name = self.ast.getNodeSource(param.?.type_expr);
-                    std.debug.print("{s}: {s}", .{ param_name, type_name });
-
-                    param = iterator.next();
-                    if (param) |_| std.debug.print(", ", .{});
-                }
-
-                // todo: handle function return type & body
-                std.debug.print(") {{}}\n", .{});
-            },
-            .@"if", .if_simple => try self.compileExpression(decl),
-            inline else => |inner| {
-                std.debug.panic("unhandled decl type: {s}\n", .{@tagName(inner)});
-            },
-        }
+        try self.compileStatement(decl);
     }
     return Bytecode{
         .instructions = try self.instructions.toOwnedSlice(),

@@ -12,18 +12,11 @@ pub const std_options = .{
 
 /// Test script to parse
 const ExampleCode = @embedFile("./test_code.zig");
-// const g = if (true) 5 else null;
-// jump_fwd, jump_back, jump_if_true/jump_if_false
-// 000 true
-// 001 jump_if_false XXX
-// 004 const [#2 => 5]
-// 007 jump_fwd 005
-// 00A null
-// 00B set_global g
 
 const ArgParser = clarp.Parser(struct {
     source: bool,
     bytecode: bool,
+    @"print-globals": bool,
 
     pub const clarp_options = clarp.Options(@This()){
         .derive_short_names = true,
@@ -44,8 +37,17 @@ pub fn main() !void {
         else => return e,
     };
 
-    const preprocessed = try preprocess(ally, ExampleCode);
+    if (parsed.root.source) {
+        std.log.info("Source Code:", .{});
+        var line_iterator = std.mem.splitScalar(u8, ExampleCode, '\n');
+        while (line_iterator.next()) |line| {
+            // don't print empty lines
+            if (line.len == 0) continue;
+            std.log.info("\t{s}", .{line});
+        }
+    }
 
+    const preprocessed = try preprocess(ally, ExampleCode);
     var ast = try Ast.parse(ally, preprocessed, .zig);
     defer ast.deinit(ally);
 
@@ -63,12 +65,6 @@ pub fn main() !void {
     // result is bytecode
     const result = try compiler.compile();
 
-    if (parsed.root.source) {
-        std.log.info(" -- Source Code --", .{});
-        try stderr.print(ExampleCode, .{});
-        std.log.info("-------------------", .{});
-    }
-
     if (parsed.root.bytecode) {
         try result.dump();
     }
@@ -77,9 +73,13 @@ pub fn main() !void {
     defer vm.deinit();
     try vm.run();
 
-    var global_iterator = vm.globals.iterator();
-    while (global_iterator.next()) |global| {
-        std.log.info("{s} = {any}", .{ global.key_ptr.*, global.value_ptr.* });
+    if (parsed.root.@"print-globals") {
+        var global_iterator = vm.globals.iterator();
+
+        std.log.info("Globals after execution:", .{});
+        while (global_iterator.next()) |global| {
+            std.log.info("\t | {s} = {any}", .{ global.key_ptr.*, global.value_ptr.* });
+        }
     }
 }
 

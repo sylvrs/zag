@@ -5,10 +5,11 @@ pub const Value = @import("value.zig").Value;
 pub const Opcode = enum(u8) {
     ret = 1,
     @"const" = 2,
-    true = 3,
-    false = 4,
-    null = 5,
-    void = 6,
+    pop = 3,
+    true = 4,
+    false = 5,
+    null = 6,
+    void = 7,
     // arithmetic
     add = 10,
     sub = 11,
@@ -31,6 +32,8 @@ pub const Opcode = enum(u8) {
     // vars
     get_global = 40,
     set_global = 41,
+    get_local = 42,
+    set_local = 43,
 
     pub fn from(byte: u8) !Opcode {
         // todo: error checking
@@ -48,6 +51,8 @@ pub const Instruction = union(Opcode) {
     ret: void,
     /// an index into the constant pool
     @"const": u16,
+    /// Pops a value from the stack
+    pop: void,
     /// Represents a true value in the program
     true: void,
     /// Represents a false value in the program
@@ -90,6 +95,10 @@ pub const Instruction = union(Opcode) {
     get_global: u16,
     /// Sets the global value by the name using the constant index
     set_global: u16,
+    /// Gets the local value based on the stack offset provided
+    get_local: u16,
+    /// Pops a value from the stack and sets it as the value of the var at the stack offset
+    set_local: u16,
 };
 
 const Self = @This();
@@ -125,7 +134,7 @@ pub fn dump(self: Self) !void {
 
                 std.log.info("{s} [{x:0>4}]", .{ @tagName(opcode), amount });
             },
-            .set_global, .get_global => |inner| {
+            .set_global, .get_global, .set_local, .get_local => |inner| {
                 const const_idx = self.fetchInt(u16, index);
                 index += 2;
                 std.log.info("{s} [{any}]", .{ @tagName(inner), self.constant_pool[const_idx] });

@@ -22,6 +22,16 @@ const Stack = struct {
         if (self.items.items.len == 0) return error.StackUnderflow;
         return self.items.pop();
     }
+
+    pub fn get(self: *Stack, offset: u16) !Value {
+        if (offset >= self.items.items.len) return error.StackOverflow;
+        return self.items.items[offset];
+    }
+
+    pub fn set(self: *Stack, offset: u16, new_value: Value) !void {
+        if (offset >= self.items.items.len) return error.StackOverflow;
+        self.items.items[offset] = new_value;
+    }
 };
 
 const Self = @This();
@@ -85,6 +95,14 @@ pub fn run(self: *Self) !void {
         const opcode = try Opcode.from(raw_instr);
         try self.execute(opcode);
     }
+
+    if (self.stack.items.items.len > 0) {
+        std.log.warn("Stack was not empty after program ended:", .{});
+        for (self.stack.items.items, 0..) |item, idx| {
+            std.log.warn("Stack #{d}: {any}", .{ idx, item });
+        }
+        std.log.warn("--------------------------", .{});
+    }
 }
 
 /// Executes a single instruction given the opcode
@@ -99,6 +117,7 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             const value = self.fetchConstant();
             try self.stack.push(value);
         },
+        .pop => _ = try self.stack.pop(),
         .true, .false => try self.stack.push(if (opcode == .true) Value.True else Value.False),
         .null => try self.stack.push(Value.Null),
         .void => try self.stack.push(Value.Void),
@@ -161,6 +180,18 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             const new_value = try self.stack.pop();
 
             try self.globals.put(name_value.identifier, new_value);
+        },
+        .get_local => {
+            const stack_offset = self.fetchInt(u16);
+            const value = try self.stack.get(stack_offset);
+
+            try self.stack.push(value);
+        },
+        .set_local => {
+            const new_value = try self.stack.pop();
+            const stack_offset = self.fetchInt(u16);
+
+            try self.stack.set(stack_offset, new_value);
         },
         // inline else => |tag| std.debug.panic("{s} is not implemented", .{@tagName(tag)}),
     }
