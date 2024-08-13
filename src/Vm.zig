@@ -99,9 +99,8 @@ pub fn run(self: *Self) !void {
     if (self.stack.items.items.len > 0) {
         std.log.warn("Stack was not empty after program ended:", .{});
         for (self.stack.items.items, 0..) |item, idx| {
-            std.log.warn("Stack #{d}: {any}", .{ idx, item });
+            std.log.warn("\t | Stack #{d}: {any}", .{ idx, item });
         }
-        std.log.warn("--------------------------", .{});
     }
 }
 
