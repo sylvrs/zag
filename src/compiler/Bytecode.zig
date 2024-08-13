@@ -111,14 +111,20 @@ constant_pool: []const Value,
 pub fn dump(self: Self) !void {
     var index: usize = 0;
 
-    std.log.info(" -- Bytecode --", .{});
+    std.log.info("Bytecode:", .{});
+
+    // formatted lines shouldn't exceed a KB
+    var fmted_buf: [1024]u8 = undefined;
+    var stream = std.io.fixedBufferStream(&fmted_buf);
+    const writer = stream.writer();
+
     while (index < self.instructions.len) {
         const raw = self.instructions[index];
         const opcode = Opcode.from(raw) catch |err| {
             std.log.err("encountered unexpected opcode 0x{x:0>2} at index {d}", .{ raw, index });
             return err;
         };
-        std.log.info("{x:0>4} ", .{index});
+        try writer.print("\t | {x:0>4} ", .{index});
         index += 1;
 
         switch (opcode) {
@@ -126,23 +132,24 @@ pub fn dump(self: Self) !void {
                 const const_idx = self.fetchInt(u16, index);
                 index += 2;
 
-                std.log.info("const [#{d} => {any}]", .{ const_idx, self.constant_pool[const_idx] });
+                try writer.print("const [#{d} => {any}]", .{ const_idx, self.constant_pool[const_idx] });
             },
             .jump_if_false, .jump_fwd, .jump_back => {
                 const amount = self.fetchInt(u16, index);
                 index += 2;
 
-                std.log.info("{s} [{x:0>4}]", .{ @tagName(opcode), amount });
+                try writer.print("{s} [{x:0>4}]", .{ @tagName(opcode), amount });
             },
             .set_global, .get_global, .set_local, .get_local => |inner| {
                 const const_idx = self.fetchInt(u16, index);
                 index += 2;
-                std.log.info("{s} [{any}]", .{ @tagName(inner), self.constant_pool[const_idx] });
+                try writer.print("{s} [{any}]", .{ @tagName(inner), self.constant_pool[const_idx] });
             },
-            inline else => |tag| std.log.info("{s}", .{@tagName(tag)}),
+            inline else => |tag| try writer.print("{s}", .{@tagName(tag)}),
         }
+        std.log.info("{s}", .{stream.getWritten()});
+        stream.reset();
     }
-    std.log.info("----------------", .{});
 }
 
 pub fn fetchInt(self: Self, comptime IntType: type, start: usize) IntType {
