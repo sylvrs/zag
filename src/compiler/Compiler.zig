@@ -72,17 +72,20 @@ const Context = struct {
         self.current_scope_depth += 1;
     }
 
-    pub fn endScope(self: *Context) void {
+    pub fn endScope(self: *Context) usize {
         self.current_scope_depth -= 1;
 
+        var popped: usize = 0;
         var iterator = self.locals.iterator();
         while (iterator.next()) |entry| {
             const local = entry.value_ptr.*;
             // todo: stack-based?
             if (local.depth > self.current_scope_depth) {
                 _ = self.locals.orderedRemove(entry.key_ptr.*);
+                popped += 1;
             }
         }
+        return popped;
     }
 
     pub fn getStackOffset(self: *Context) u16 {
@@ -260,10 +263,8 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
     switch (node_tag) {
         .block, .block_two, .block_semicolon, .block_two_semicolon => {
             self.context.startScope();
-            defer {
-                self.context.endScope();
-                self.addInstruction(.pop) catch unreachable;
-            }
+
+            // fetch statements from block
             var statements_buf: [2]Ast.Node.Index = undefined;
             const statements = switch (node_tag) {
                 .block_two,
@@ -288,6 +289,10 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
                 // std.debug.print("node_tag: {s}\n", .{@tagName(self.ast.nodes.items(.tag)[expr])});
                 try self.compileStatement(@intCast(expr));
             }
+
+            const popped = self.context.endScope();
+            // if we removed vars from the scope, we should pop them after we exit scope
+            for (0..popped) |_| try self.addInstruction(.pop);
         },
         .number_literal => {
             const parsed = std.zig.parseNumberLiteral(node_source);
