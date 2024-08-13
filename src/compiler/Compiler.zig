@@ -209,6 +209,7 @@ pub fn compileAssign(self: *Self, node_idx: Ast.Node.Index) !void {
     const var_ident = self.ast.getNodeSource(node_data.lhs);
     const ident_idx = try self.addConstant(.{ .identifier = var_ident });
 
+    // todo: don't allow overwriting if var is const
     const local = self.context.getLocal(ident_idx);
 
     if (local == null and !self.context.hasGlobal(ident_idx)) {
