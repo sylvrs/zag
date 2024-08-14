@@ -108,6 +108,48 @@ instructions: []const u8,
 /// The constants that make up the program
 constant_pool: []const Value,
 
+pub fn format(self: Self, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+    var index: usize = 0;
+    while (index < self.instructions.len) {
+        const raw = self.instructions[index];
+        const opcode = try Opcode.from(raw);
+        try writer.print("{x:0>4} ", .{index});
+        index += 1;
+        index += try self.formatOpcode(opcode, index, writer);
+        if (index < self.instructions.len - 1) try writer.writeByte('\n');
+    }
+}
+
+/// Formats an opcode into the writer and returns the amount of bytes consumed
+fn formatOpcode(self: Self, opcode: Opcode, offset: usize, writer: anytype) !usize {
+    var size: usize = 0;
+    switch (opcode) {
+        .@"const" => {
+            const const_idx = self.fetchInt(u16, offset);
+            size += 2;
+            try writer.print("const [#{d} => {any}]", .{ const_idx, self.constant_pool[const_idx] });
+        },
+        .jump_if_false, .jump_fwd, .jump_back => {
+            const amount = self.fetchInt(u16, offset);
+            size += 2;
+
+            try writer.print("{s} [{x:0>4}]", .{ @tagName(opcode), amount });
+        },
+        .get_global, .set_global => |inner| {
+            const const_idx = self.fetchInt(u16, offset);
+            size += 2;
+            try writer.print("{s} [{any}]", .{ @tagName(inner), self.constant_pool[const_idx] });
+        },
+        .get_local, .set_local => |inner| {
+            const stack_offset = self.fetchInt(u16, offset);
+            size += 2;
+            try writer.print("{s} [#{d}]", .{ @tagName(inner), stack_offset });
+        },
+        inline else => |tag| try writer.print("{s}", .{@tagName(tag)}),
+    }
+    return size;
+}
+
 pub fn dump(self: Self) !void {
     var index: usize = 0;
 
@@ -126,27 +168,7 @@ pub fn dump(self: Self) !void {
         };
         try writer.print("\t | {x:0>4} ", .{index});
         index += 1;
-
-        switch (opcode) {
-            .@"const" => {
-                const const_idx = self.fetchInt(u16, index);
-                index += 2;
-
-                try writer.print("const [#{d} => {any}]", .{ const_idx, self.constant_pool[const_idx] });
-            },
-            .jump_if_false, .jump_fwd, .jump_back => {
-                const amount = self.fetchInt(u16, index);
-                index += 2;
-
-                try writer.print("{s} [{x:0>4}]", .{ @tagName(opcode), amount });
-            },
-            .set_global, .get_global, .set_local, .get_local => |inner| {
-                const const_idx = self.fetchInt(u16, index);
-                index += 2;
-                try writer.print("{s} [{any}]", .{ @tagName(inner), self.constant_pool[const_idx] });
-            },
-            inline else => |tag| try writer.print("{s}", .{@tagName(tag)}),
-        }
+        index += try self.formatOpcode(opcode, index, writer);
         std.log.info("{s}", .{stream.getWritten()});
         stream.reset();
     }

@@ -92,7 +92,10 @@ pub fn fetchConstant(self: *Self) Value {
 pub fn run(self: *Self) !void {
     while (self.program_counter < self.program.instructions.len) {
         const raw_instr = self.fetchByte();
-        const opcode = try Opcode.from(raw_instr);
+        const opcode = Opcode.from(raw_instr) catch |err| {
+            std.log.err("Encountered invalid opcode {x:0>2} at PC {x:0>4}", .{ raw_instr, self.program_counter - 1 });
+            return err;
+        };
         try self.execute(opcode);
     }
 
@@ -102,6 +105,13 @@ pub fn run(self: *Self) !void {
             std.log.warn("\t | Stack #{d}: {any}", .{ idx, item });
         }
     }
+}
+
+pub fn pop(self: *Self) !Value {
+    return self.stack.pop() catch |err| {
+        std.log.err("unable to pop stack at PC {x:0>4}", .{self.program_counter});
+        return err;
+    };
 }
 
 /// Executes a single instruction given the opcode
@@ -116,13 +126,13 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             const value = self.fetchConstant();
             try self.stack.push(value);
         },
-        .pop => _ = try self.stack.pop(),
+        .pop => _ = try self.pop(),
         .true, .false => try self.stack.push(if (opcode == .true) Value.True else Value.False),
         .null => try self.stack.push(Value.Null),
         .void => try self.stack.push(Value.Void),
         .add, .sub, .mul, .div, .pow, .mod => {
-            const first = try self.stack.pop();
-            const second = try self.stack.pop();
+            const first = try self.pop();
+            const second = try self.pop();
 
             //            try @field(first, @tagName(opcode));
             const result = switch (opcode) {
@@ -137,8 +147,8 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             try self.stack.push(result);
         },
         .gt, .gte, .lt, .lte, .eq, .not_eq => {
-            const first = try self.stack.pop();
-            const second = try self.stack.pop();
+            const first = try self.pop();
+            const second = try self.pop();
 
             const result = switch (opcode) {
                 .gt => boolToValue(try first.greaterThan(second)),
@@ -153,20 +163,20 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             try self.stack.push(result);
         },
         .jump_if_false => {
-            const amount = self.fetchInt(u16);
+            const addr = self.fetchInt(u16);
 
-            const condition = try self.stack.pop();
+            const condition = try self.pop();
             if (condition != .boolean) std.debug.panic("expected boolean, but received {s}", .{@tagName(condition)});
 
-            if (!condition.boolean) self.program_counter += amount;
+            if (!condition.boolean) self.program_counter = addr;
         },
         .jump_fwd => {
-            const amount = self.fetchInt(u16);
-            self.program_counter += amount;
+            const addr = self.fetchInt(u16);
+            self.program_counter += addr;
         },
         .jump_back => {
-            const amount = self.fetchInt(u16);
-            self.program_counter -= amount;
+            const addr = self.fetchInt(u16);
+            self.program_counter = addr;
         },
         .get_global => {
             const name_value = self.fetchConstant();
@@ -176,7 +186,7 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
         },
         .set_global => {
             const name_value = self.fetchConstant();
-            const new_value = try self.stack.pop();
+            const new_value = try self.pop();
 
             try self.globals.put(name_value.identifier, new_value);
         },
@@ -187,9 +197,8 @@ pub fn execute(self: *Self, opcode: Opcode) !void {
             try self.stack.push(value);
         },
         .set_local => {
-            const new_value = try self.stack.pop();
+            const new_value = try self.pop();
             const stack_offset = self.fetchInt(u16);
-
             try self.stack.set(stack_offset, new_value);
         },
         // inline else => |tag| std.debug.panic("{s} is not implemented", .{@tagName(tag)}),

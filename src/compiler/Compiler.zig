@@ -1,6 +1,8 @@
 // dichael mouglas
 const std = @import("std");
 const Ast = std.zig.Ast;
+
+const parser = @import("../parser.zig");
 const Bytecode = @import("Bytecode.zig");
 
 const Self = @This();
@@ -27,7 +29,11 @@ const Variable = struct {
 
 /// Context represents scope, depth, etc.
 const Context = struct {
-    current_scope_depth: u32 = 0,
+    const ScopeIndex = u32;
+
+    ally: std.mem.Allocator,
+
+    current_scope_depth: ScopeIndex = 0,
     // const a = 1;
     // const b = 2;
     //
@@ -39,13 +45,34 @@ const Context = struct {
     /// Mapping of local variables to their variable structs
     locals: std.AutoArrayHashMap(ConstantIndex, Variable),
 
+    /// A flag to determine whether we can handle break/continues in the current state of the program
+    current_loop_depth: ScopeIndex = 0,
+    /// A map of the scope depth to the list of break instruction offsets
+    break_statements: std.AutoArrayHashMap(ScopeIndex, std.ArrayList(u16)),
+    /// A map of the scope depth to the list of continue instruction offsets
+    continue_statements: std.AutoArrayHashMap(ScopeIndex, std.ArrayList(u16)),
+
     pub fn init(ally: std.mem.Allocator) Context {
-        return .{ .globals = std.AutoArrayHashMap(ConstantIndex, void).init(ally), .locals = std.AutoArrayHashMap(ConstantIndex, Variable).init(ally) };
+        return .{
+            .ally = ally,
+            .globals = std.AutoArrayHashMap(ConstantIndex, void).init(ally),
+            .locals = std.AutoArrayHashMap(ConstantIndex, Variable).init(ally),
+            .break_statements = std.AutoArrayHashMap(ScopeIndex, std.ArrayList(u16)).init(ally),
+            .continue_statements = std.AutoArrayHashMap(ScopeIndex, std.ArrayList(u16)).init(ally),
+        };
     }
 
     pub fn deinit(self: *Context) void {
         self.globals.deinit();
         self.locals.deinit();
+        for (self.break_statements.values()) |*stmts| {
+            stmts.deinit();
+        }
+        self.break_statements.deinit();
+        for (self.continue_statements.values()) |*stmts| {
+            stmts.deinit();
+        }
+        self.continue_statements.deinit();
     }
 
     pub fn hasGlobal(self: *Context, name_idx: ConstantIndex) bool {
@@ -86,6 +113,91 @@ const Context = struct {
             }
         }
         return popped;
+    }
+
+    pub fn addBreakStatement(self: *Context, instr_offset: u16) !void {
+        // create the scope if we don't have one
+        const scope = try self.break_statements.getOrPutValue(self.current_loop_depth, std.ArrayList(u16).init(self.ally));
+        // append the instr offset to the list
+        try scope.value_ptr.append(instr_offset);
+    }
+
+    pub fn addContinueStatement(self: *Context, instr_offset: u16) !void {
+        // create the scope if we don't have one
+        const scope = try self.continue_statements.getOrPutValue(self.current_loop_depth, std.ArrayList(u16).init(self.ally));
+        // append the instr offset to the list
+        try scope.value_ptr.append(instr_offset);
+    }
+
+    pub fn getCurrentContinues(self: *Context) ?*std.ArrayList(u16) {
+        return self.continue_statements.getPtr(self.current_loop_depth);
+    }
+
+    pub fn getCurrentBreaks(self: *Context) ?*std.ArrayList(u16) {
+        return self.break_statements.getPtr(self.current_loop_depth);
+    }
+
+    pub fn startLoopScope(self: *Context) void {
+        self.current_loop_depth += 1;
+    }
+
+    pub fn clearLoopScope(self: *Context) void {
+        self.current_loop_depth -= 1;
+        const conts = self.getCurrentContinues();
+        const breaks = self.getCurrentBreaks();
+        // clear lists before removing
+        if (conts) |list| list.deinit();
+        if (breaks) |list| list.deinit();
+
+        // remove scope from map when done
+        if (self.continue_statements.contains(self.current_loop_depth)) {
+            _ = self.continue_statements.orderedRemove(self.current_loop_depth);
+        }
+        if (self.break_statements.contains(self.current_loop_depth)) {
+            _ = self.break_statements.orderedRemove(self.current_loop_depth);
+        }
+    }
+
+    pub fn patchLoop(self: *Context, compiler: *Self, loop_cond_start: u16, loop_end: u16, cont_start: ?u16) void {
+        // if we have continues, patch them with the instr offset where the loop condition starts
+        if (self.getCurrentContinues()) |list| {
+            for (list.items) |instr_offset| {
+                try compiler.replaceAt(instr_offset, u16, if (cont_start) |cont| cont else loop_cond_start);
+            }
+            // i < 100
+            // info:    | 000c const [#3 => 100]
+            // info:    | 000f get_global [i]
+            // info:    | 0012 lt
+            // info:    | 0013 jump_if_false [001d]
+            // info:    | 0016 const [#4 => 50]
+            // info:    | 0019 get_global [i]
+        }
+
+        // jump here!
+        // - i < 10
+        // const 10
+        // get i
+        // lt
+        // - i += 1
+        // const 1
+        // get i
+        // add
+        // set i
+        // - continue;
+        // jump_back loop_cond_start
+        // loop end here
+        //
+        // while (i < 10) {
+        // i += 1;
+        // continue;
+        // }
+
+        // if we have breaks, patch them with the instr offset where the loop ends
+        if (self.getCurrentBreaks()) |list| {
+            for (list.items) |instr_offset| {
+                try compiler.replaceAt(instr_offset, u16, loop_end);
+            }
+        }
     }
 
     pub fn getStackOffset(self: *Context) u16 {
@@ -151,6 +263,11 @@ fn addInstruction(self: *Self, opcode: Bytecode.Opcode) !void {
 
 fn appendSliceToInstructions(self: *Self, data: []const u8) !void {
     try self.instructions.appendSlice(data);
+}
+
+/// Returns the current instruction offset
+fn getInstructionOffset(self: *Self) u16 {
+    return @intCast(self.instructions.items.len);
 }
 
 fn compileVarDecl(self: *Self, var_decl: Ast.full.VarDecl) !void {
@@ -355,48 +472,67 @@ pub fn compileExpression(self: *Self, node_idx: Ast.Node.Index) !void {
                 inline else => unreachable,
             });
         },
+        .@"while", .while_cont, .while_simple => {
+            self.context.startLoopScope();
+            defer self.context.clearLoopScope();
+            const while_expr = self.ast.fullWhile(node_idx) orelse return error.WhileExpected;
+
+            const jb_target = self.getInstructionOffset();
+            try self.compileExpression(while_expr.ast.cond_expr);
+            try self.addInstruction(.jump_if_false);
+            const jif_data_pos = self.getInstructionOffset();
+            try self.compileInt(MaxJumpLength);
+            // const jif_start = self.getInstructionOffset();
+            // todo: compile the cont expression
+            try self.compileExpression(while_expr.ast.then_expr);
+
+            var cont_pos: ?u16 = null;
+            // todo: is this the correct behavior?
+            if (while_expr.ast.cont_expr != 0) {
+                cont_pos = self.getInstructionOffset();
+                try self.compileStatement(while_expr.ast.cont_expr);
+            }
+
+            try self.addInstruction(.jump_back);
+            const jb_data_pos = self.getInstructionOffset();
+            try self.compileInt(MaxJumpLength);
+            // todo: compile the else expression
+
+            const jif_target = self.getInstructionOffset();
+
+            try self.replaceAt(jif_data_pos, u16, jif_target);
+            try self.replaceAt(jb_data_pos, u16, jb_target);
+            // patch in breaks and conts if we have them
+            self.context.patchLoop(self, jb_target, jif_target, cont_pos);
+        },
         .@"if", .if_simple => {
             const if_expr = self.ast.fullIf(node_idx) orelse return error.IfExpected;
-            const if_data = self.ast.nodes.items(.data)[node_idx];
-            _ = if_data; // autofix
-
-            // if (true) 2
-            // 000 true
-            // 001 jump_if_false (007 - 001 = 006)
-            // 004 const [2]
-            // 007 jump_fwd (00d - 007 = 003)
-            // ...
-            // else 5
-            // 00a const [5]
-            // ...
-            // 00d void
             try self.compileExpression(if_expr.ast.cond_expr);
 
             try self.addInstruction(.jump_if_false);
-            const jif_pos: u16 = @intCast(self.instructions.items.len);
+            const jif_pos = self.getInstructionOffset();
             try self.compileInt(MaxJumpLength);
-            const jif_offset_start = self.instructions.items.len;
 
             // body:
-            try self.compileExpression(if_expr.ast.then_expr);
+            try self.compileStatement(if_expr.ast.then_expr);
 
-            try self.addInstruction(.jump_fwd);
-            const jfwd_pos = self.instructions.items.len;
-            try self.compileInt(MaxJumpLength);
-            const jfwd_offset_start = self.instructions.items.len;
-
-            const jif_offset_end = self.instructions.items.len;
             // else:
             if (if_expr.ast.else_expr != 0) {
-                try self.compileExpression(if_expr.ast.else_expr);
-            } else {
-                try self.addInstruction(.void);
-            }
-            const jfwd_offset_end = self.instructions.items.len;
+                try self.addInstruction(.jump_fwd);
+                const jfwd_pos = self.getInstructionOffset();
+                try self.compileInt(MaxJumpLength);
 
+                try self.compileStatement(if_expr.ast.else_expr);
+                const jfwd_target = self.getInstructionOffset();
+                try self.replaceAt(jfwd_pos, u16, jfwd_target);
+            } else {
+                // todo: how should we manage voids here
+                // try self.addInstruction(.void);
+            }
+
+            const jif_target = self.getInstructionOffset();
             // patch the relative jumps
-            try self.replaceAt(jif_pos, u16, @intCast(jif_offset_end - jif_offset_start));
-            try self.replaceAt(jfwd_pos, u16, @intCast(jfwd_offset_end - jfwd_offset_start));
+            try self.replaceAt(jif_pos, u16, jif_target);
         },
         inline else => |tag| std.debug.panic("expr {s} is not implemented", .{@tagName(tag)}),
     }
@@ -436,8 +572,8 @@ pub fn compileInt(self: *Self, value: anytype) !void {
 }
 
 pub fn compileStatement(self: *Self, node_idx: Ast.Node.Index) anyerror!void {
-    const node_data = self.ast.nodes.items(.data);
-    const node_tags = self.ast.nodes.items(.tag);
+    const node_data: []const Ast.Node.Data = self.ast.nodes.items(.data);
+    const node_tags: []const Ast.Node.Tag = self.ast.nodes.items(.tag);
     switch (node_tags[node_idx]) {
         .simple_var_decl => {
             const var_decl = self.ast.simpleVarDecl(node_idx);
@@ -481,9 +617,34 @@ pub fn compileStatement(self: *Self, node_idx: Ast.Node.Index) anyerror!void {
             // todo: handle function return type & body
             std.debug.print(") {{}}\n", .{});
         },
+        .block, .block_two, .block_semicolon, .block_two_semicolon => try self.compileExpression(node_idx),
         .@"if", .if_simple => try self.compileExpression(node_idx),
+        .@"while", .while_cont, .while_simple => try self.compileExpression(node_idx),
+        .@"continue" => {
+            if (self.context.current_loop_depth == 0) {
+                return error.ContinueNotInLoop;
+            }
+            try self.addInstruction(.jump_back);
+            const jump_data_pos = self.getInstructionOffset();
+            try self.compileInt(MaxJumpLength);
+            try self.context.addContinueStatement(jump_data_pos);
+        },
+        .@"break" => {
+            if (self.context.current_loop_depth == 0) {
+                return error.BreakNotInLoop;
+            }
+
+            // todo: handle break values
+            try self.addInstruction(.jump_fwd);
+            const jump_data_pos = self.getInstructionOffset();
+            try self.context.addBreakStatement(jump_data_pos);
+            try self.compileInt(MaxJumpLength);
+        },
         inline else => |inner| {
-            std.debug.panic("unhandled decl type: {s}\n", .{@tagName(inner)});
+            self.compileExpression(node_idx) catch {
+                const source = self.ast.getNodeSource(node_idx);
+                std.debug.panic("unhandled decl type '{s}':\n{s}", .{ @tagName(inner), source });
+            };
         },
     }
 }
@@ -506,7 +667,25 @@ pub fn compile(self: *Self) !Bytecode {
     // 1. assert that the fn is the root
     // 2. walk the nodes inside of the fn body
     // 3. parse that as the base script
-    const decls = self.ast.extra_data[fn_body.lhs..fn_body.rhs];
+    var decls_buf: [2]Ast.Node.Index = undefined;
+    const decls = switch (node_tags[fn_decl_data.rhs]) {
+        .block_two,
+        .block_two_semicolon,
+        => b: {
+            decls_buf = .{ fn_body.lhs, fn_body.rhs };
+            if (fn_body.lhs == 0) {
+                break :b decls_buf[0..0];
+            } else if (fn_body.rhs == 0) {
+                break :b decls_buf[0..1];
+            } else {
+                break :b decls_buf[0..2];
+            }
+        },
+        .block,
+        .block_semicolon,
+        => self.ast.extra_data[fn_body.lhs..fn_body.rhs],
+        else => unreachable,
+    };
 
     // todo: if consts are referenced in a fn body, we need to declare that as global
     // iterate over the body
@@ -517,4 +696,79 @@ pub fn compile(self: *Self) !Bytecode {
         .instructions = try self.instructions.toOwnedSlice(),
         .constant_pool = try self.constant_pool.toOwnedSlice(),
     };
+}
+
+fn compileAndTest(expected: []const u8, input: []const u8) !void {
+    const Vm = @import("../Vm.zig");
+    const ally = std.testing.allocator;
+
+    const preprocessed = try parser.preprocess(ally, input);
+    defer ally.free(preprocessed);
+    var ast = try Ast.parse(ally, preprocessed, .zig);
+    defer ast.deinit(ally);
+
+    var compiler = Self.init(ally, &ast);
+    defer compiler.deinit();
+    const program = try compiler.compile();
+    defer ally.free(program.instructions);
+    defer ally.free(program.constant_pool);
+
+    var vm = Vm.init(ally, program);
+    defer vm.deinit();
+
+    try vm.run();
+
+    try std.testing.expectFmt(expected, "{s}", .{program});
+}
+
+test "ensure basic while loop works" {
+    const source =
+        \\var i = 0;
+        \\while (i < 100): (i += 1) {
+        \\    // do something here...
+        \\}
+    ;
+    const expected =
+        \\0000 const [#1 => 0]
+        \\0003 set_global [i]
+        \\0006 const [#2 => 100]
+        \\0009 get_global [i]
+        \\000c lt
+        \\000d jump_if_false [001d]
+        \\0010 const [#3 => 1]
+        \\0013 get_global [i]
+        \\0016 add
+        \\0017 set_global [i]
+        \\001a jump_back [0006]
+    ;
+    try compileAndTest(expected, source);
+}
+
+test "ensure continue statement works" {
+    const source =
+        \\var i = 0;
+        \\while (i < 100): (i += 1) {
+        \\    if (i < 50) continue;
+        \\    // do something here...
+        \\}
+    ;
+    const expected =
+        \\0000 const [#1 => 0]
+        \\0003 set_global [i]
+        \\0006 const [#2 => 100]
+        \\0009 get_global [i]
+        \\000c lt
+        \\000d jump_if_false [002a]
+        \\0010 const [#3 => 50]
+        \\0013 get_global [i]
+        \\0016 lt
+        \\0017 jump_if_false [001d]
+        \\001a jump_back [001d]
+        \\001d const [#4 => 1]
+        \\0020 get_global [i]
+        \\0023 add
+        \\0024 set_global [i]
+        \\0027 jump_back [0006]
+    ;
+    try compileAndTest(expected, source);
 }
