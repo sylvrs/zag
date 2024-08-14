@@ -26,6 +26,7 @@ pub const Opcode = enum(u8) {
     not_eq = 21,
 
     // jumps
+    // todo: move back to relative jumps
     jump_if_false = 30,
     jump_fwd = 31,
     jump_back = 32,
